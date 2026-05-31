@@ -540,7 +540,9 @@ const app = new Hono()
       console.error("Settings load error:", e);
     }
 
-    if (!autoEnabled) {
+    // Paper mode always runs — it's the live test bed.
+    // Only block if BOTH auto-trade is off AND we're not in paper mode.
+    if (!autoEnabled && !paperMode) {
       scanInProgress = false;
       return c.json({ ok: false, reason: "Auto-trade is disabled" }, 200);
     }
@@ -654,15 +656,15 @@ const app = new Hono()
 
       // ── Empty markets abort ────────────────────────────────────────────
       if (markets.length === 0) {
-        console.warn("[Engine] No markets returned — aborting scan");
+        console.warn("[Engine] No qualifying markets after liquidity filter — scan complete with 0 opportunities");
         await db.update(scanLog).set({
           completedAt: new Date().toISOString(),
           marketsScanned: 0,
           opportunitiesFound: 0,
           tradesExecuted: 0,
-          error: "No markets from feed",
+          error: null,
         }).where(eq(scanLog.id, scanId)).catch(() => {});
-        return c.json({ ok: false, reason: "No markets returned from Kalshi feed" }, 200);
+        return c.json({ ok: true, paper_mode: paperMode, markets_scanned: 0, opportunities_found: 0, trades_executed: 0, reason: "No qualifying markets after liquidity filter" }, 200);
       }
 
       // ── Fetch history per market for velocity signals (cap at 30) ─────
@@ -1010,7 +1012,7 @@ const app = new Hono()
         engine_version: ENGINE_VERSION,
         last_scan: lastScan[0] || null,
         trades_today: todayTrades.length,
-        next_scan_info: autoEnabled ? "Engine scans every 5 minutes" : "Auto-trade disabled",
+        next_scan_info: (autoEnabled || paperMode) ? "Engine scans every 5 minutes" : "Auto-trade disabled",
         open_positions: openPositions.length,
         max_open_positions: maxOpenPositions,
         position_size_mode: positionSizeMode,

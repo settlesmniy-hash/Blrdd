@@ -45,6 +45,16 @@ export default function PerformanceScreen() {
     refetchInterval: 15000,
   });
 
+  // Engine status — always polling so we can show paper engine live status
+  const { data: engineStatus } = useQuery({
+    queryKey: ["engine-status"],
+    queryFn: async () => {
+      const res = await fetch(`${BASE_URL}api/trade-engine/status`);
+      return res.json() as any;
+    },
+    refetchInterval: 15000,
+  });
+
   // Trade log
   const { data: tradesData } = useQuery({
     queryKey: ["trades"],
@@ -243,17 +253,33 @@ export default function PerformanceScreen() {
             {/* ── TAB 0: P&L ── */}
             {activeTab === 0 && (
               <>
+                {/* ── Paper Engine Live Status Banner ── */}
+                {engineStatus?.paper_mode && (
+                  <View style={{ flexDirection: "row", alignItems: "center", backgroundColor: "#0f2027", borderRadius: 10, padding: 12, marginBottom: 12, borderWidth: 1, borderColor: Colors.blue ?? "#3b82f6", gap: 10 }}>
+                    <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.blue ?? "#3b82f6", shadowColor: Colors.blue, shadowOpacity: 0.8, shadowRadius: 4 }} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ color: Colors.blue ?? "#3b82f6", fontWeight: "700", fontSize: 12 }}>PAPER ENGINE RUNNING</Text>
+                      <Text style={{ color: Colors.gray ?? "#6b7280", fontSize: 11, marginTop: 2 }}>
+                        Scanning every 5 min · {engineStatus?.last_scan ? `Last: ${new Date(engineStatus.last_scan.startedAt).toLocaleTimeString()}` : "Waiting for first scan"}
+                      </Text>
+                    </View>
+                    <Text style={{ color: Colors.blue ?? "#3b82f6", fontSize: 11, fontWeight: "600" }}>
+                      ${((engineStatus?.paper_balance_cents ?? 100000) / 100).toFixed(2)}
+                    </Text>
+                  </View>
+                )}
+
                 {!hasTrades ? (
                   <View style={styles.emptyCard}>
-                    <Text style={styles.emptyTitle}>No Trades Yet</Text>
+                    <Text style={styles.emptyTitle}>Scanning Markets...</Text>
                     <Text style={styles.emptySub}>
-                      Enable Auto-Trade to start building a paper track record. All P&L shown here comes from engine v{ENGINE_VERSION} only.
+                      Paper engine is running in the background, scanning every 5 minutes. Trades will appear here automatically when high-confidence opportunities are found.
                     </Text>
                     <TouchableOpacity
                       style={styles.emptyBtn}
                       onPress={() => router.push("/auto-trade")}
                     >
-                      <Text style={styles.emptyBtnText}>Enable Auto-Trade</Text>
+                      <Text style={styles.emptyBtnText}>View Engine Settings</Text>
                     </TouchableOpacity>
                   </View>
                 ) : (
@@ -306,11 +332,21 @@ export default function PerformanceScreen() {
                       {perf.live?.trades_closed ?? 0} · {fmt$(((perf.live?.realized_pnl) ?? 0))} · {fmtPct(perf.live?.win_rate)}
                     </Text>
                   </View>
-                  {/* Parity note */}
+                  {/* Parity + scan stats */}
                   <View style={[styles.pnlRow, { marginTop: 6, paddingTop: 6, borderTopWidth: 1, borderTopColor: Colors.border ?? "#2a2a2a" }]}>
                     <Text style={[styles.pnlLabel, { color: Colors.gray ?? "#6b7280", fontSize: 11 }]}>Engine parity</Text>
                     <Text style={[styles.pnlValue, { color: Colors.green ?? "#22c55e", fontSize: 11 }]}>PAPER = LIVE ✓</Text>
                   </View>
+                  <View style={[styles.pnlRow]}>
+                    <Text style={[styles.pnlLabel, { color: Colors.gray ?? "#6b7280", fontSize: 11 }]}>Total scans</Text>
+                    <Text style={[styles.pnlValue, { color: Colors.gray ?? "#6b7280", fontSize: 11 }]}>{perf.total_scans ?? 0} scans run</Text>
+                  </View>
+                  {perf.last_scan_at && (
+                    <View style={[styles.pnlRow]}>
+                      <Text style={[styles.pnlLabel, { color: Colors.gray ?? "#6b7280", fontSize: 11 }]}>Last scan</Text>
+                      <Text style={[styles.pnlValue, { color: Colors.gray ?? "#6b7280", fontSize: 11 }]}>{perf.last_scan_at}</Text>
+                    </View>
+                  )}
                 </View>
 
                 <Text style={styles.sectionLabel}>TODAY</Text>
