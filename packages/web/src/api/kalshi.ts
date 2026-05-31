@@ -107,23 +107,38 @@ const CRYPTO_HOURLY_SERIES = ["KXBTCD", "KXSOLD", "KXETH"];
 // Short-term events (7-day window)
 const EVENT_SERIES = ["KXSENATEREC", "KXCABLEAVE", "KXTRUMPTIME"];
 
-async function fetchSeries(seriesTicker: string, limitPerSeries = 20): Promise<any[]> {
-  try {
-    const params = new URLSearchParams({
-      series_ticker: seriesTicker,
-      status: "open",
-      limit: String(limitPerSeries),
-    });
-    const res = await fetch(`${KALSHI_BASE}/markets?${params}`, {
-      headers: { Accept: "application/json" },
-      signal: AbortSignal.timeout(8000),
-    });
-    if (!res.ok) return [];
-    const data = await res.json();
-    return data.markets || [];
-  } catch {
-    return [];
+async function fetchSeries(seriesTicker: string, limitPerSeries = 20, retries = 2): Promise<any[]> {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const params = new URLSearchParams({
+        series_ticker: seriesTicker,
+        status: "open",
+        limit: String(limitPerSeries),
+      });
+      const res = await fetch(`${KALSHI_BASE}/markets?${params}`, {
+        headers: { Accept: "application/json" },
+        signal: AbortSignal.timeout(12000),
+      });
+      if (res.status === 429) {
+        // Rate limited — wait and retry
+        console.warn(`[Kalshi] Rate limited on ${seriesTicker}, waiting 2s before retry ${attempt + 1}`);
+        await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
+        continue;
+      }
+      if (!res.ok) {
+        console.warn(`[Kalshi] fetchSeries ${seriesTicker} status ${res.status}`);
+        return [];
+      }
+      const data = await res.json();
+      const markets = data.markets || [];
+      if (markets.length === 0) console.warn(`[Kalshi] fetchSeries ${seriesTicker} returned 0 markets`);
+      return markets;
+    } catch (e: any) {
+      console.warn(`[Kalshi] fetchSeries ${seriesTicker} attempt ${attempt + 1} error: ${e?.message || e}`);
+      if (attempt < retries) await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+    }
   }
+  return [];
 }
 
 /**
@@ -194,22 +209,36 @@ export async function fetchMarkets(
   limit = 100
 ): Promise<KalshiMarket[]> {
   try {
-    // Fetch all series in parallel
-    // NBA Finals uses event-based structure so needs fetchSeriesViaEvents
-    const [sportsRaw, nbaSeries, crypto15mRaw, cryptoHourlyRaw, eventRaw] = await Promise.all([
-      Promise.all(SPORTS_SERIES.filter(s => s !== "KXNBAGAME").map(s => fetchSeries(s, 20))).then(r => r.flat()),
-      fetchSeriesViaEvents("KXNBAGAME", 10),
+    // Fetch in sequential batches to avoid rate limiting
+    // Batch 1: Sports (highest value, prioritize)
+    const sportsSeries = SPORTS_SERIES.filter(s => s !== "KXNBAGAME");
+    const sportsResults: any[][] = [];
+    for (const s of sportsSeries) {
+      sportsResults.push(await fetchSeries(s, 20));
+    }
+    const sportsRaw = sportsResults.flat();
+    const nbaSeries = await fetchSeriesViaEvents("KXNBAGAME", 10);
+    const allSportsRaw = [...sportsRaw, ...nbaSeries];
+
+    // Batch 2: Crypto (parallel is fine — only 3-6 series)
+    const [crypto15mRaw, cryptoHourlyRaw] = await Promise.all([
       Promise.all(CRYPTO_15M_SERIES.map(s => fetchSeries(s, 5))).then(r => r.flat()),
       Promise.all(CRYPTO_HOURLY_SERIES.map(s => fetchSeries(s, 10))).then(r => r.flat()),
-      Promise.all(EVENT_SERIES.map(s => fetchSeries(s, 10))).then(r => r.flat()),
     ]);
-    const allSportsRaw = [...sportsRaw, ...nbaSeries];
+
+    // Batch 3: Events
+    const eventRaw = (await Promise.all(EVENT_SERIES.map(s => fetchSeries(s, 10)))).flat();
+
+    // Log raw counts for debugging
+    console.log(`[Kalshi] Raw: sports=${allSportsRaw.length} crypto15m=${crypto15mRaw.length} cryptoH=${cryptoHourlyRaw.length} events=${eventRaw.length}`);
 
     // Filter each group with appropriate time windows
     const sports = filterLiquid(allSportsRaw, 21);      // games up to 3 weeks out
     const crypto15m = filterLiquid(crypto15mRaw, 1); // 15m markets — must close within 1 day
     const cryptoHourly = filterLiquid(cryptoHourlyRaw, 2); // hourly — within 2 days
     const events = filterLiquid(eventRaw, 7);         // events — within 7 days
+
+    console.log(`[Kalshi] After filter: sports=${sports.length} crypto15m=${crypto15m.length} cryptoH=${cryptoHourly.length} events=${events.length}`);
 
     // Combine, dedupe, normalize
     const all = dedupe([...crypto15m, ...cryptoHourly, ...sports, ...events]);
@@ -229,7 +258,9 @@ export async function fetchMarkets(
       return b.volume - a.volume;
     });
 
-    return normalized.slice(0, limit);
+    const result = normalized.slice(0, limit);
+    console.log(`[Kalshi] fetchMarkets total=${result.length}`);
+    return result;
   } catch (e) {
     console.error("fetchMarkets error:", e);
     return [];

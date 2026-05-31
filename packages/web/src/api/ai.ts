@@ -369,6 +369,14 @@ export function evaluateMarket(
         if ((velOk && accOk && discountOk) || spreadTight) {
           action = "BUY_NO"; side = "no"; ev = evNo; entryPrice = noAsk;
         }
+      } else if (spreadTight) {
+        // Zero velocity (no history yet) but tight spread — enter whichever side has better EV
+        // This fires for new markets or in-game markets before price history accumulates
+        if (evYes >= evNo && evYes >= MIN_EV) {
+          action = "BUY_YES"; side = "yes"; ev = evYes; entryPrice = yesAsk;
+        } else if (evNo >= MIN_EV) {
+          action = "BUY_NO"; side = "no"; ev = evNo; entryPrice = noAsk;
+        }
       }
     }
   }

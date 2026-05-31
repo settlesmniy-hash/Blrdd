@@ -1519,9 +1519,35 @@ const app = new Hono()
       const weeklyPnl = closed.filter(t => new Date(t.enteredAt).getTime() > now - oneWeek)
         .reduce((s, t) => s + (t.pnl || 0), 0);
 
+      // Build exit distribution for mobile compatibility
+      const exitDist: Record<string, number> = {};
+      Object.entries(exitReasons).forEach(([r, d]) => { exitDist[r] = d.count; });
+
+      // Overall grade
+      const grade = verdict === "EDGE_CONFIRMED" ? "A"
+        : verdict === "MARGINAL_EDGE" ? "B"
+        : closed.length >= 5 ? "C"
+        : "D";
+
       return c.json({
         engine_version: ENGINE_VERSION,
         status: "ok",
+        // Top-level fields expected by mobile app
+        trades_closed: closed.length,
+        trades_open: open.length,
+        win_rate: winRate,
+        total_pnl: totalPnl,
+        avg_win: avgWin,
+        avg_loss: avgLoss,
+        profit_factor: profitFactor,
+        expectancy_per_trade: expectancy,
+        max_drawdown: maxDrawdown,
+        avg_hold_minutes: avgHoldMinutes,
+        ai_confidence_accuracy: winRate, // proxy: win rate as confidence accuracy
+        p_target_accuracy: pTargetAccuracy,
+        overall_grade: grade,
+        exit_distribution: exitDist,
+        // Nested summary (for backward compat)
         summary: {
           verdict,
           is_profitable: totalPnl > 0,
