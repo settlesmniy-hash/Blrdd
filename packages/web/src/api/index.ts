@@ -47,12 +47,14 @@ async function runPositionMonitor(): Promise<{ checked: number; exited: number; 
   const markets = await fetchMarkets().catch(() => [] as any[]);
   const priceMap = new Map<string, { yesAsk: number; yesBid: number; noAsk: number; noBid: number; lastPrice: number }>();
   for (const m of markets) {
+    // yes_ask/yes_bid are already 0.0-1.0 decimals from parseDollar in kalshi.ts
+    // DO NOT divide by 100 again — that was causing phantom 99¢ exit prices
     priceMap.set(m.ticker, {
-      yesAsk: m.yes_ask / 100,
-      yesBid: m.yes_bid / 100,
-      noAsk: (100 - m.yes_bid) / 100,
-      noBid: (100 - m.yes_ask) / 100,
-      lastPrice: m.last_price / 100,
+      yesAsk: m.yes_ask,
+      yesBid: m.yes_bid,
+      noAsk: m.no_ask,
+      noBid: m.no_bid,
+      lastPrice: m.last_price,
     });
   }
 
@@ -94,7 +96,8 @@ async function runPositionMonitor(): Promise<{ checked: number; exited: number; 
       hoursToClose,
       null,  // no price history
       null,  // no current EV
-      false  // no better opportunity signal
+      false, // no better opportunity signal
+      pos.pTarget ?? null  // pass stored pTarget so exit tiers are accurate
     );
 
     const logId = randomUUID();
