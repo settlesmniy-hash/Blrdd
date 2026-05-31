@@ -478,6 +478,28 @@ const app = new Hono()
   })
 
   // ─── Trade Engine: Scan + Execute ─────────────────────────────────────────
+  //
+  // ARCHITECTURE: Paper mode and live mode use THE EXACT SAME engine.
+  //   Same scanner (fetchMarkets + evaluateMarket)
+  //   Same probability engine (velocityScore, accelerationScore, crowdAgreement)
+  //   Same opportunity scoring (momentumScore, ev, entryQuality)
+  //   Same confidence calculations (entryQuality, confidence)
+  //   Same Kelly sizing (kellySized → positionSizeCents)
+  //   Same entry logic (evaluateMarket thresholds)
+  //   Same exit logic (evaluateExit in runPositionMonitor)
+  //   Same stop-loss logic (HARD_STOP_RETREAT_PCT, profitPct <= -35%)
+  //   Same profit-taking logic (3-tier scale-out via pTarget tiers)
+  //   Same position management (positions table, peakPrice, trailingStop)
+  //   Same risk controls (daily loss limit, max open positions, kelly cap)
+  //   Same scheduler (server.ts setInterval → POST /api/trade-engine/scan)
+  //   Same category filters (filterCategories setting)
+  //   Same settings (all from settings table, both modes share identical config)
+  //   Same adaptive learning (getScanAdaptations — mode-agnostic)
+  //
+  //   ONLY difference:
+  //   PAPER: db.insert(trades, { paperTrade: true }) — no Kalshi API call
+  //   LIVE:  placeOrder(kalshiCreds) → db.insert(trades, { paperTrade: false })
+  //
   .post('/trade-engine/scan', async (c) => {
     if (scanInProgress) {
       return c.json({ ok: false, reason: "Scan already in progress" }, 200);
@@ -792,7 +814,7 @@ const app = new Hono()
         const tradeId = randomUUID();
 
         if (paperMode) {
-          // Paper fill at entry price (midpoint)
+          // Paper fill at ask price — same as live (opp.entryPrice = yesAsk or noAsk from ai.ts)
           await db.insert(trades).values({
             id: tradeId,
             marketId: opp.ticker,
@@ -995,6 +1017,11 @@ const app = new Hono()
         fixed_position_size: fixedPositionSize,
         personality,
         recent_win_rate: recentWinRate,
+        // Paper = live engine. Only execution layer differs.
+        engine_parity: "PAPER_EQUALS_LIVE",
+        paper_mode_note: paperMode
+          ? "Paper mode: trades recorded to DB. Same engine, same logic, same risk controls as live."
+          : "LIVE mode: trades sent to Kalshi. Same engine as paper.",
       }, 200);
     } catch (e) {
       return c.json({ error: "Status unavailable" }, 500);
@@ -1040,6 +1067,13 @@ const app = new Hono()
         ? allTrades.reduce((s, t) => s + (t.evAtEntry || 0), 0) / allTrades.length
         : null;
 
+      // Paper vs live split — all results are from the same real engine
+      // The ONLY difference: paper=true records to DB, live=true sends to Kalshi
+      const paperClosed = closed.filter(t => t.paperTrade === true);
+      const liveClosed  = closed.filter(t => t.paperTrade !== true);
+      const paperPnl    = paperClosed.reduce((s, t) => s + (t.pnl || 0), 0);
+      const livePnl     = liveClosed.reduce((s, t) => s + (t.pnl || 0), 0);
+
       return c.json({
         engine_version: ENGINE_VERSION,
         realized_pnl: totalPnl,
@@ -1052,6 +1086,17 @@ const app = new Hono()
         avg_ev: avgEv,
         total_scans: totalScans.length,
         last_scan_at: lastScan[0]?.startedAt ?? null,
+        // Paper vs live breakdown (same engine — only execution differs)
+        paper: {
+          trades_closed: paperClosed.length,
+          realized_pnl: paperPnl,
+          win_rate: paperClosed.length > 0 ? paperClosed.filter(t => (t.pnl || 0) > 0).length / paperClosed.length : null,
+        },
+        live: {
+          trades_closed: liveClosed.length,
+          realized_pnl: livePnl,
+          win_rate: liveClosed.length > 0 ? liveClosed.filter(t => (t.pnl || 0) > 0).length / liveClosed.length : null,
+        },
         today: {
           opened: todayTrades.length,
           closed: todayClosed.length,

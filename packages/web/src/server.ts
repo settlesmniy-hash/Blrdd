@@ -37,7 +37,9 @@ const server = Bun.serve({
 console.log(`Web server listening on http://localhost:${server.port}`);
 
 // ─── Trade Engine Loop ────────────────────────────────────────────────────
-// Runs every 5 minutes, calls the scan endpoint internally
+// Same engine runs for both paper and live mode.
+// paper_mode flag controls ONLY whether orders go to Kalshi or DB.
+// All scanning, probability, sizing, entries, exits, risk controls: IDENTICAL.
 const SCAN_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
 async function runEngineScan() {
@@ -47,7 +49,8 @@ async function runEngineScan() {
     const data = await res.json() as any;
 
     if (data.ok) {
-      console.log(`[Engine] Scan complete — ${data.markets_scanned} markets, ${data.trades_executed} trades (${data.paper_mode ? "paper" : "LIVE"})`);
+      const mode = data.paper_mode ? "PAPER" : "LIVE";
+      console.log(`[Engine:${mode}] Scan complete — ${data.markets_scanned} markets scanned, ${data.trades_executed} trades executed | adaptive: ${data.adaptive_mode}`);
     } else {
       console.log(`[Engine] Scan skipped — ${data.reason || data.error || "unknown"}`);
     }

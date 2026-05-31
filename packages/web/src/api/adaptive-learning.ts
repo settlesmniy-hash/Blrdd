@@ -198,7 +198,7 @@ export async function computeAdaptiveState(): Promise<AdaptiveState> {
   // ── Daily profit lock ─────────────────────────────────────────────────
   const todayUtc = new Date().toISOString().split("T")[0];
   const storedPeakDate = s.daily_peak_date || "";
-  const paperBalanceCents = parseInt(s.paper_balance || "100000", 10) * 100;
+  const paperBalanceCents = parseInt(s.paper_balance || "100000", 10); // stored as cents (e.g. 100000 = $1000.00)
   // If peak is from a previous day, reset it
   let dailyPeakValueCents = storedPeakDate === todayUtc
     ? parseInt(s.daily_peak_cents || "0", 10)

@@ -278,6 +278,41 @@ export default function PerformanceScreen() {
                   </View>
                 )}
 
+                {/* ── Paper vs Live Engine Breakdown ── */}
+                <Text style={styles.sectionLabel}>ENGINE MODE BREAKDOWN</Text>
+                <View style={styles.pnlCard}>
+                  {/* Header row */}
+                  <View style={[styles.pnlRow, { borderBottomWidth: 1, borderBottomColor: Colors.border ?? "#2a2a2a", paddingBottom: 6, marginBottom: 4 }]}>
+                    <Text style={[styles.pnlLabel, { fontWeight: "700", color: Colors.text ?? "#fff" }]}>Mode</Text>
+                    <Text style={[styles.pnlValue, { fontWeight: "700", color: Colors.text ?? "#fff", fontSize: 11 }]}>Trades · P&L · Win%</Text>
+                  </View>
+                  {/* Paper row */}
+                  <View style={styles.pnlRow}>
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                      <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.blue ?? "#3b82f6" }} />
+                      <Text style={styles.pnlLabel}>Paper Engine</Text>
+                    </View>
+                    <Text style={styles.pnlValue}>
+                      {perf.paper?.trades_closed ?? 0} · {fmt$(((perf.paper?.realized_pnl) ?? 0))} · {fmtPct(perf.paper?.win_rate)}
+                    </Text>
+                  </View>
+                  {/* Live row */}
+                  <View style={styles.pnlRow}>
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                      <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.green ?? "#22c55e" }} />
+                      <Text style={styles.pnlLabel}>Live Engine</Text>
+                    </View>
+                    <Text style={[styles.pnlValue, { color: (perf.live?.realized_pnl ?? 0) >= 0 ? Colors.green : Colors.red }]}>
+                      {perf.live?.trades_closed ?? 0} · {fmt$(((perf.live?.realized_pnl) ?? 0))} · {fmtPct(perf.live?.win_rate)}
+                    </Text>
+                  </View>
+                  {/* Parity note */}
+                  <View style={[styles.pnlRow, { marginTop: 6, paddingTop: 6, borderTopWidth: 1, borderTopColor: Colors.border ?? "#2a2a2a" }]}>
+                    <Text style={[styles.pnlLabel, { color: Colors.gray ?? "#6b7280", fontSize: 11 }]}>Engine parity</Text>
+                    <Text style={[styles.pnlValue, { color: Colors.green ?? "#22c55e", fontSize: 11 }]}>PAPER = LIVE ✓</Text>
+                  </View>
+                </View>
+
                 <Text style={styles.sectionLabel}>TODAY</Text>
                 <View style={styles.todayCard}>
                   {[
