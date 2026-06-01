@@ -8,13 +8,7 @@ import { useRouter } from "expo-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Ionicons } from "@expo/vector-icons";
 import { Colors } from "../lib/colors";
-import { api } from "../lib/api";
-import Constants from "expo-constants";
-
-const BASE_URL =
-  (Constants.expoConfig?.extra?.apiUrl as string) ??
-  process.env.EXPO_PUBLIC_API_URL ??
-  "http://localhost:4200/";
+import { api, apiFetch } from "../lib/api";
 
 const TRADE_SIZE_PRESETS = ["0.01", "0.05", "0.10", "0.25", "0.50", "1.00"];
 const MAX_POSITIONS_OPTIONS = ["1", "2", "3", "5", "10"];
@@ -41,6 +35,7 @@ export default function AutoTradeScreen() {
   const qc = useQueryClient();
 
   const [autoEnabled,    setAutoEnabled]    = useState(false);
+  const [paperMode,      setPaperMode]      = useState(true);
   const [tradeSize,      setTradeSize]      = useState("0.25");
   const [dailyBudget,    setDailyBudget]    = useState("5.00");
   const [maxPositions,   setMaxPositions]   = useState("3");
@@ -61,16 +56,16 @@ export default function AutoTradeScreen() {
   const { data: statusData } = useQuery({
     queryKey: ["engine-status"],
     queryFn: async () => {
-      const res = await fetch(`${BASE_URL}api/trade-engine/status`);
+      const res = await apiFetch(`api/trade-engine/status`);
       return res.json() as any;
     },
     refetchInterval: 10000,
   });
 
   const { data: perfData } = useQuery({
-    queryKey: ["performance"],
+    queryKey: ["perf2"],
     queryFn: async () => {
-      const res = await api.performance.$get();
+      const res = await api.perf2.$get();
       return res.json() as any;
     },
     refetchInterval: 30000,
@@ -80,6 +75,7 @@ export default function AutoTradeScreen() {
     if (!settingsData?.settings) return;
     const s = settingsData.settings;
     setAutoEnabled(s.auto_trade_enabled === "true");
+    setPaperMode(s.paper_trading_enabled !== "false");
     if (s.fixed_position_size) setTradeSize(s.fixed_position_size);
     if (s.max_daily_capital)   setDailyBudget(s.max_daily_capital);
     if (s.max_open_positions)  setMaxPositions(s.max_open_positions);
@@ -94,7 +90,7 @@ export default function AutoTradeScreen() {
     mutationFn: async () => {
       const pairs: [string, string][] = [
         ["auto_trade_enabled",         autoEnabled ? "true" : "false"],
-        ["paper_trading_enabled",      "false"],
+        ["paper_trading_enabled",      paperMode ? "true" : "false"],
         ["fixed_position_size",        tradeSize],
         ["position_size_mode",         "fixed_amount"],
         ["max_daily_capital",          dailyBudget],
@@ -158,12 +154,14 @@ export default function AutoTradeScreen() {
           {/* ── AI Status Card ──────────────────────────────────────── */}
           <View style={[styles.statusCard, autoEnabled ? styles.statusCardOn : styles.statusCardOff]}>
             <View style={styles.statusCardTop}>
-              <View>
+              <View style={{ flex: 1 }}>
                 <Text style={styles.statusCardTitle}>AI Trading Engine</Text>
                 <Text style={styles.statusCardSub}>
                   {autoEnabled
-                    ? "Live — AI scanning markets with real money"
-                    : "Enable Auto-Trade to begin AI trading"}
+                    ? paperMode
+                      ? "Paper mode — AI testing with simulated money"
+                      : "Live — AI scanning markets with real money"
+                    : "Enable to start AI scanning markets"}
                 </Text>
               </View>
               <Switch
@@ -211,10 +209,49 @@ export default function AutoTradeScreen() {
               </Text>
             )}
 
-            {autoEnabled && (
+            {/* Paper balance */}
+            {autoEnabled && paperMode && (
+              <View style={{ flexDirection: "row", alignItems: "center", marginTop: 8, gap: 6 }}>
+                <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: "#3b82f6" }} />
+                <Text style={{ color: "#3b82f6", fontSize: 12, fontWeight: "600" }}>
+                  PAPER MODE — Balance: ${((status.paper_balance_cents ?? 100000) / 100).toFixed(2)}
+                </Text>
+              </View>
+            )}
+
+            {/* Live warning — only shown when NOT in paper mode */}
+            {autoEnabled && !paperMode && (
               <View style={styles.liveWarning}>
                 <Ionicons name="warning" size={13} color={Colors.orange} />
                 <Text style={styles.liveWarningText}>LIVE mode — real money on Kalshi</Text>
+              </View>
+            )}
+          </View>
+
+          {/* ── Paper / Live Mode Toggle ─────────────────────────────── */}
+          <Text style={styles.sectionLabel}>TRADING MODE</Text>
+          <View style={styles.card}>
+            <View style={styles.settingRow}>
+              <View style={styles.settingLeft}>
+                <Text style={styles.settingLabel}>Paper Mode</Text>
+                <Text style={styles.settingSubLabel}>
+                  {paperMode
+                    ? "Simulated trades — testing AI performance"
+                    : "OFF — engine will place real Kalshi orders"}
+                </Text>
+              </View>
+              <Switch
+                value={paperMode}
+                onValueChange={v => { setPaperMode(v); mark(); }}
+                trackColor={{ false: Colors.grayDark, true: "#1e3a5f" }}
+                thumbColor={paperMode ? "#3b82f6" : Colors.gray}
+                ios_backgroundColor={Colors.grayDark}
+              />
+            </View>
+            {!paperMode && (
+              <View style={[styles.liveWarning, { marginTop: 8, marginBottom: 0 }]}>
+                <Ionicons name="warning" size={13} color={Colors.orange} />
+                <Text style={styles.liveWarningText}>Real orders will be sent to Kalshi</Text>
               </View>
             )}
           </View>

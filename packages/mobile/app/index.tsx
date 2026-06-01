@@ -7,16 +7,10 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
 import { Colors } from "../lib/colors";
-import { api } from "../lib/api";
+import { api, apiFetch } from "../lib/api";
 import { Ionicons } from "@expo/vector-icons";
-import Constants from "expo-constants";
 
 const { width: SW } = Dimensions.get("window");
-
-const BASE_URL =
-  (Constants.expoConfig?.extra?.apiUrl as string) ??
-  process.env.EXPO_PUBLIC_API_URL ??
-  "http://localhost:4200/";
 
 // ─── Live countdown hook ──────────────────────────────────────────────────────
 function useCountdown(closeTime?: string): string {
@@ -152,7 +146,7 @@ export default function HomeScreen() {
   const { data, isLoading, refetch, isRefetching } = useQuery({
     queryKey: ["markets-structured"],
     queryFn: async () => {
-      const res = await fetch(`${BASE_URL}api/markets/structured`);
+      const res = await apiFetch(`api/markets/structured`);
       return res.json();
     },
     refetchInterval: 10000,
@@ -161,7 +155,7 @@ export default function HomeScreen() {
   const { data: statusData } = useQuery({
     queryKey: ["engine-status"],
     queryFn: async () => {
-      const res = await fetch(`${BASE_URL}api/trade-engine/status`);
+      const res = await apiFetch(`api/trade-engine/status`);
       return res.json() as any;
     },
     refetchInterval: 10000,
@@ -170,16 +164,16 @@ export default function HomeScreen() {
   const { data: kalshiPortfolio } = useQuery({
     queryKey: ["portfolio-kalshi"],
     queryFn: async () => {
-      const res = await fetch(`${BASE_URL}api/portfolio`);
+      const res = await apiFetch(`api/portfolio`);
       return res.json() as any;
     },
     refetchInterval: 10000,
   });
 
   const { data: perfData } = useQuery({
-    queryKey: ["performance"],
+    queryKey: ["perf2"],
     queryFn: async () => {
-      const res = await api.performance.$get();
+      const res = await api.perf2.$get();
       return res.json() as any;
     },
     refetchInterval: 30000,

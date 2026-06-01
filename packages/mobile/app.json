@@ -11,7 +11,8 @@
     },
     "extra": {
       "apiUrl": "https://04m2eu2a72ijk90qdhal9-preview-4200.runable.site/",
-      "applicationId": "04m2eu2a72ijk90qdhal9"
+      "applicationId": "04m2eu2a72ijk90qdhal9",
+      "apiKey": "c9a1e4c0426e143e64d94e9d5328a32ec862c397cbae07393e2282267c08829c"
     },
     "ios": {
       "bundleIdentifier": "com.pulsetrade_k7m2.runable",

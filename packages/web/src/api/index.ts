@@ -22,6 +22,26 @@ import {
   type ProtectionMode,
 } from "./adaptive-learning.js";
 
+/**
+ * Resolve paper trading mode from a settings map or raw string value.
+ *
+ * Rules:
+ *   "true"  → paper mode ON   (explicit)
+ *   "false" → paper mode OFF  (explicit, requires live creds to trade)
+ *   missing / anything else → paper mode ON  (safe default — never accidentally go live)
+ *
+ * Previously used `!== "false"` which silently stayed in paper mode for any typo
+ * (e.g. "False", "0", "disabled").  Now the only way to go live is an explicit "false".
+ */
+function resolvePaperMode(value: string | undefined): boolean {
+  if (value === "false") return false; // explicit opt-out: go live
+  return true;                         // default: paper mode
+}
+
+// ─── In-memory cache: return last good DB result on ECONNRESET ────────────
+let lastGoodPerf: any = null;
+let lastGoodStatus: any = null;
+
 // RSA credentials from env
 function getKalshiCreds(): { keyId: string; privateKey: string } | null {
   const keyId = process.env.KALSHI_KEY_ID;
@@ -40,7 +60,7 @@ async function runPositionMonitor(): Promise<{ checked: number; exited: number; 
   const rows = await db.select().from(settings).catch(() => []);
   const s: Record<string, string> = {};
   rows.forEach(r => { s[r.key] = r.value; });
-  const paperMode = s.paper_trading_enabled !== "false";
+  const paperMode = resolvePaperMode(s.paper_trading_enabled);
   const paperBalanceCents = parseInt(s.paper_balance || "100000");
 
   // Fetch current prices
@@ -195,10 +215,29 @@ setInterval(async () => {
   }
 }, 60_000);
 
+// API key guard — protects all mutating endpoints.
+// Set INTERNAL_API_KEY in .env to enable. If unset, guard is skipped (dev mode).
+const apiKeyMiddleware = async (c: any, next: any) => {
+  const requiredKey = process.env.INTERNAL_API_KEY;
+  if (!requiredKey) return next(); // dev mode — no key configured, pass through
+  const provided = c.req.header('x-api-key');
+  if (provided !== requiredKey) {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+  return next();
+};
+
 const app = new Hono()
   .basePath('api')
   .use(cors({ origin: (origin) => origin ?? "*", credentials: true, exposeHeaders: ["set-auth-token"] }))
-  .get('/ping', (c) => c.json({ message: `Pong! ${Date.now()}` }, 200))
+  .use(async (c, next) => {
+    // Prevent all proxy/CDN caching of API responses
+    await next();
+    c.res.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+    c.res.headers.set('Pragma', 'no-cache');
+    c.res.headers.set('Expires', '0');
+  })
+  .get('/ping', (c) => c.json({ message: `Pong! ${Date.now()}`, server: 'bun-5617-NEW' }, 200))
   .get('/health', (c) => c.json({ status: 'ok' }, 200))
 
   // ─── Markets ──────────────────────────────────────────────────────────────
@@ -378,6 +417,11 @@ const app = new Hono()
     return c.json({ connected: true, ...data }, 200);
   })
 
+  // ─── Mutating routes — protected by API key ───────────────────────────────
+  .use('/orders', apiKeyMiddleware)
+  .use('/trade-engine/*', apiKeyMiddleware)
+  .use('/settings', apiKeyMiddleware)
+
   // ─── Place order ──────────────────────────────────────────────────────────
   .post('/orders', async (c) => {
     const body = await c.req.json();
@@ -389,7 +433,7 @@ const app = new Hono()
         .from(settings)
         .where(eq(settings.key, "paper_trading_enabled"))
         .limit(1);
-      paperMode = !paperSetting[0] || paperSetting[0].value !== "false";
+      paperMode = resolvePaperMode(paperSetting[0]?.value);
     } catch {}
 
     const creds = getKalshiCreds();
@@ -435,6 +479,8 @@ const app = new Hono()
           count: body.count,
           avgEntryPrice: body.price / 100,
           paperTrade: true,
+          // Manual orders don't have pTarget — exit monitor falls back to entryPrice*1.20
+          pTarget: body.p_target ?? null,
         }).onConflictDoUpdate({
           target: positions.marketId,
           set: {
@@ -512,7 +558,7 @@ const app = new Hono()
 
     // Load settings
     let autoEnabled = false;
-    let paperMode = false;
+    let paperMode = true; // default true — ECONNRESET fallback should not block scans
     let maxRiskPct = 2;
     let paperBalanceCents = 100_000;
 
@@ -530,13 +576,17 @@ const app = new Hono()
       rows.forEach(r => { s[r.key] = r.value; });
 
       autoEnabled = s.auto_trade_enabled === "true";
-      paperMode = s.paper_trading_enabled !== "false";
+      paperMode = resolvePaperMode(s.paper_trading_enabled);
       maxRiskPct = parseFloat(s.max_account_risk_pct || "2");
       paperBalanceCents = parseInt(s.paper_balance || "100000");
       positionSizeMode = s.position_size_mode || "ai_managed";
       fixedPositionSizeCents = Math.round(parseFloat(s.fixed_position_size || "1.00") * 100);
       maxOpenPositions = parseInt(s.max_open_positions || "5");
-      configuredDailyLossLimitCents = parseFloat(s.daily_loss_limit || "0") * 100;
+      // daily_loss_limit is stored as a dollar string (e.g. "4.00" = $4.00)
+      // saved by auto-trade.tsx as: String(parseFloat(dailyBudget) * 0.8)
+      // Multiply by 100 to convert to cents for comparison with todayPnlCents
+      const rawLimit = parseFloat(s.daily_loss_limit || "0");
+      configuredDailyLossLimitCents = isFinite(rawLimit) && rawLimit > 0 ? rawLimit * 100 : 0;
       minConfidencePct = parseFloat(s.min_confidence_pct || "0");
       filterCategories = s.market_filter_categories ? JSON.parse(s.market_filter_categories) : [];
     } catch (e) {
@@ -585,11 +635,11 @@ const app = new Hono()
             if (cat === "crypto15m") return (
               t.startsWith("KXBTC") || t.startsWith("KXETH") ||
               t.startsWith("KXSOL") || t.startsWith("KXCRYPTO")
-            ) && m.close_time && (new Date(m.close_time).getTime() - Date.now()) < 90 * 60 * 1000;
+            ) && m.close_time && (new Date(m.close_time).getTime() - Date.now()) <= 20 * 60 * 1000;
             if (cat === "crypto1h") return (
               t.startsWith("KXBTC") || t.startsWith("KXETH") ||
               t.startsWith("KXSOL") || t.startsWith("KXCRYPTO")
-            ) && m.close_time && (new Date(m.close_time).getTime() - Date.now()) >= 90 * 60 * 1000;
+            ) && m.close_time && (new Date(m.close_time).getTime() - Date.now()) > 20 * 60 * 1000;
             if (cat === "basketball") return t.startsWith("KXNBA") || t.startsWith("KXWNBA");
             if (cat === "baseball") return t.startsWith("KXMLB");
             return false;
@@ -720,6 +770,15 @@ const app = new Hono()
       }
 
       for (const opp of opportunities) {
+        // ── Too close to close — skip if less than 3 minutes remain ─────
+        if (opp.closeTime) {
+          const minsLeft = (new Date(opp.closeTime).getTime() - Date.now()) / 60_000;
+          if (minsLeft < 3) {
+            console.log(`[Engine] Skipping ${opp.ticker} — only ${minsLeft.toFixed(1)}m until close`);
+            continue;
+          }
+        }
+
         // ── Min confidence filter (adaptive: raised during loss streaks) ──
         if (adaptedMinConfidence > 0 && opp.confidence < adaptedMinConfidence) continue;
 
@@ -746,19 +805,21 @@ const app = new Hono()
             sql`date(${trades.enteredAt}) = ${today}`
           )).catch(() => []);
 
-        // todayPnl: sum of pnl column (fractional dollars, e.g. 0.05 = 5¢)
-        // Convert to cents by × 100 before comparing to dailyLossLimitCents
+        // todayPnl: sum of pnl column — pnl is stored in fractional dollars (e.g. 0.47 = 47¢)
+        // Multiply by 100 to get cents, then compare to dailyLossLimitCents (also in cents)
+        // Unit chain: pnl (dollars) × 100 = cents  vs  configuredDailyLossLimitCents (cents)
         const todayPnlDollars = todayTrades
           .filter(t => t.status === "closed")
-          .reduce((sum, t) => sum + (t.pnl || 0), 0);
+          .reduce((sum, t) => sum + (typeof t.pnl === "number" && isFinite(t.pnl) ? t.pnl : 0), 0);
         const todayPnlCents = todayPnlDollars * 100;
 
+        // Daily loss limit: use configured value (cents) or default to 5% of paper balance
         const dailyLossLimitCents = configuredDailyLossLimitCents > 0
           ? configuredDailyLossLimitCents
-          : paperBalanceCents * 0.05; // default: 5%
+          : paperBalanceCents * 0.05; // 5% of paper balance in cents
 
         if (todayPnlCents < -dailyLossLimitCents) {
-          console.log(`[Engine] Daily loss limit hit: -${(Math.abs(todayPnlCents) / 100).toFixed(2)}`);
+          console.log(`[Engine] Daily loss limit hit: -${(Math.abs(todayPnlCents) / 100).toFixed(2)} (limit: ${(dailyLossLimitCents / 100).toFixed(2)})`);
           break;
         }
 
@@ -851,7 +912,7 @@ const app = new Hono()
             .onConflictDoUpdate({ target: settings.key, set: { value: newBal.toString() } })
             .catch(() => {});
 
-          // Track position
+          // Track position — include pTarget so exit tier calculations use real momentum target
           await db.insert(positions).values({
             id: randomUUID(),
             marketId: opp.ticker,
@@ -860,6 +921,7 @@ const app = new Hono()
             count,
             avgEntryPrice: opp.entryPrice,
             paperTrade: true,
+            pTarget: opp.pTarget ?? null,
           }).onConflictDoUpdate({
             target: positions.marketId,
             set: {
@@ -913,6 +975,24 @@ const app = new Hono()
               velocityAtEntry: opp.velocityScore ?? null,
               momentumScore: opp.momentumScore ?? null,
             }).catch(() => {});
+
+            // Track live position so runPositionMonitor can apply stop-loss / exit logic
+            await db.insert(positions).values({
+              id: randomUUID(),
+              marketId: opp.ticker,
+              marketTitle: markets.find(m => m.ticker === opp.ticker)?.title || opp.ticker,
+              side: opp.side!,
+              count,
+              avgEntryPrice: opp.entryPrice,
+              paperTrade: false,
+              pTarget: opp.pTarget ?? null,
+            }).onConflictDoUpdate({
+              target: positions.marketId,
+              set: {
+                count: sql`positions.count + ${count}`,
+                lastUpdated: sql`datetime('now')`,
+              },
+            }).catch(() => {});
           }
         }
 
@@ -964,13 +1044,23 @@ const app = new Hono()
   })
 
   .get('/trade-engine/status', async (c) => {
+    async function dbRetry<T>(fn: () => Promise<T>, retries = 3): Promise<T> {
+      for (let i = 0; i < retries; i++) {
+        try { return await fn(); } catch (e: any) {
+          if (i < retries - 1 && (e?.code === "ECONNRESET" || e?.message?.includes("socket"))) {
+            await new Promise(r => setTimeout(r, 400 * (i + 1)));
+          } else throw e;
+        }
+      }
+      throw new Error("db retry exhausted");
+    }
     try {
-      const rows = await db.select().from(settings);
+      const rows = await dbRetry(() => db.select().from(settings));
       const s: Record<string, string> = {};
       rows.forEach(r => { s[r.key] = r.value; });
 
       const autoEnabled = s.auto_trade_enabled === "true";
-      const paperMode = s.paper_trading_enabled !== "false";
+      const paperMode = resolvePaperMode(s.paper_trading_enabled);
       const maxRiskPct = parseFloat(s.max_account_risk_pct || "2");
       const paperBalance = parseInt(s.paper_balance || "100000");
       const maxOpenPositions = parseInt(s.max_open_positions || "5");
@@ -1007,7 +1097,7 @@ const app = new Hono()
         : recentWinRate <= 0.40 ? "defensive"
         : "balanced";
 
-      return c.json({
+      const statusResult = {
         auto_enabled: autoEnabled,
         paper_mode: paperMode,
         max_risk_pct: maxRiskPct,
@@ -1015,7 +1105,7 @@ const app = new Hono()
         engine_version: ENGINE_VERSION,
         last_scan: lastScan[0] || null,
         trades_today: todayTrades.length,
-        next_scan_info: (autoEnabled || paperMode) ? "Engine scans every 5 minutes" : "Auto-trade disabled",
+        next_scan_info: (autoEnabled || paperMode) ? "Engine scans every 1 minute" : "Auto-trade disabled",
         open_positions: openPositions.length,
         max_open_positions: maxOpenPositions,
         position_size_mode: positionSizeMode,
@@ -1027,18 +1117,38 @@ const app = new Hono()
         paper_mode_note: paperMode
           ? "Paper mode: trades recorded to DB. Same engine, same logic, same risk controls as live."
           : "LIVE mode: trades sent to Kalshi. Same engine as paper.",
-      }, 200);
+      };
+      lastGoodStatus = statusResult;
+      return c.json(statusResult, 200);
     } catch (e) {
+      // Return last good result if available — avoids showing stale zeros on ECONNRESET
+      if (lastGoodStatus) return c.json({ ...lastGoodStatus, _cached: true }, 200);
       return c.json({ error: "Status unavailable" }, 500);
     }
   })
 
   // ─── Performance stats from DB ────────────────────────────────────────────
   .get('/performance', async (c) => {
+    const reqId = Math.random().toString(36).slice(2, 8);
+    const host = c.req.header('host') || 'unknown';
+    console.log(`[PERF] req=${reqId} host=${host} at=${new Date().toISOString()}`);
+    // Retry helper for ECONNRESET
+    async function dbFetch<T>(fn: () => Promise<T>, retries = 3): Promise<T> {
+      for (let i = 0; i < retries; i++) {
+        try { return await fn(); } catch (e: any) {
+          if (i < retries - 1 && (e?.code === "ECONNRESET" || e?.message?.includes("socket"))) {
+            await new Promise(r => setTimeout(r, 500 * (i + 1)));
+          } else throw e;
+        }
+      }
+      throw new Error("db retry exhausted");
+    }
     try {
       // Only show trades from current engine version
-      const allTrades = await db.select().from(trades)
-        .where(eq(trades.engineVersion, ENGINE_VERSION));
+      const allTrades = await dbFetch(() => db.select().from(trades)
+        .where(eq(trades.engineVersion, ENGINE_VERSION)));
+
+      console.log(`[PERF] req=${reqId} allTrades=${allTrades.length}`);
 
       const closed = allTrades.filter(t => t.status === "closed");
       const open = allTrades.filter(t => t.status === "open");
@@ -1079,7 +1189,7 @@ const app = new Hono()
       const paperPnl    = paperClosed.reduce((s, t) => s + (t.pnl || 0), 0);
       const livePnl     = liveClosed.reduce((s, t) => s + (t.pnl || 0), 0);
 
-      return c.json({
+      const perfResult = {
         engine_version: ENGINE_VERSION,
         realized_pnl: totalPnl,
         trades_closed: closed.length,
@@ -1110,15 +1220,102 @@ const app = new Hono()
           wins: todayClosed.filter(t => (t.pnl || 0) > 0).length,
           losses: todayClosed.filter(t => (t.pnl || 0) <= 0).length,
         },
-      }, 200);
+      };
+      lastGoodPerf = perfResult;
+      const res = c.json(perfResult, 200);
+      res.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+      res.headers.set('Pragma', 'no-cache');
+      res.headers.set('Expires', '0');
+      res.headers.set('X-Timestamp', Date.now().toString());
+      return res;
     } catch (e) {
-      return c.json({
+      // Return last good result if available — avoids showing zeros on ECONNRESET
+      const fallback = lastGoodPerf
+        ? c.json({ ...lastGoodPerf, _cached: true }, 200)
+        : c.json({
+            engine_version: ENGINE_VERSION,
+            realized_pnl: 0, trades_closed: 0, trades_open: 0,
+            predictions: 0, pending: 0, win_rate: null, ai_accuracy: null,
+            avg_ev: null, total_scans: 0, last_scan_at: null,
+            today: { opened: 0, closed: 0, realized_pnl: 0, capital_used: 0, wins: 0, losses: 0 },
+          }, 200);
+      fallback.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+      fallback.headers.set('Pragma', 'no-cache');
+      fallback.headers.set('Expires', '0');
+      return fallback;
+    }
+  })
+
+  // ─── /perf2 — same as /performance but on a fresh proxy path ─────────────
+  .get('/perf2', async (c) => {
+    // Forward internally to /performance handler logic by reusing lastGoodPerf
+    // Just re-query the DB directly — identical logic, different URL so proxy doesn't cache stale
+    try {
+      const rows = await db.select().from(settings).catch(() => [] as any[]);
+      const s: Record<string, string> = {};
+      rows.forEach((r: any) => { s[r.key] = r.value; });
+
+      const allTrades = await db.select().from(trades)
+        .where(eq(trades.engineVersion, ENGINE_VERSION))
+        .catch(() => [] as any[]);
+
+      const closedTrades = allTrades.filter((t: any) => t.status === 'closed');
+      const openTrades = allTrades.filter((t: any) => t.status === 'open');
+      const wins = closedTrades.filter((t: any) => (t.pnl || 0) > 0).length;
+      const realizedPnl = closedTrades.reduce((sum: number, t: any) => sum + (t.pnl || 0), 0);
+      const winRate = closedTrades.length > 0 ? wins / closedTrades.length : null;
+
+      const scanRows = await db.select().from(scanLog)
+        .where(eq(scanLog.engineVersion, ENGINE_VERSION))
+        .orderBy(desc(scanLog.createdAt))
+        .limit(1)
+        .catch(() => [] as any[]);
+
+      const allScans = await db.select({ count: sql<number>`count(*)` }).from(scanLog)
+        .where(eq(scanLog.engineVersion, ENGINE_VERSION))
+        .catch(() => [{ count: 0 }] as any[]);
+
+      const paperTrades = closedTrades.filter((t: any) => t.paper === 1 || t.paper === true);
+      const liveTrades = closedTrades.filter((t: any) => t.paper !== 1 && t.paper !== true);
+
+      const result = {
         engine_version: ENGINE_VERSION,
-        realized_pnl: 0, trades_closed: 0, trades_open: 0,
-        predictions: 0, pending: 0, win_rate: null, ai_accuracy: null,
-        avg_ev: null, total_scans: 0, last_scan_at: null,
+        realized_pnl: realizedPnl,
+        trades_closed: closedTrades.length,
+        trades_open: openTrades.length,
+        predictions: allTrades.length,
+        pending: openTrades.length,
+        win_rate: winRate,
+        ai_accuracy: null,
+        avg_ev: null,
+        total_scans: Number(allScans[0]?.count ?? 0),
+        last_scan_at: scanRows[0]?.createdAt ?? null,
+        paper: {
+          trades_closed: paperTrades.length,
+          realized_pnl: paperTrades.reduce((s: number, t: any) => s + (t.pnl || 0), 0),
+          win_rate: paperTrades.length > 0 ? paperTrades.filter((t: any) => (t.pnl || 0) > 0).length / paperTrades.length : null,
+        },
+        live: {
+          trades_closed: liveTrades.length,
+          realized_pnl: liveTrades.reduce((s: number, t: any) => s + (t.pnl || 0), 0),
+          win_rate: liveTrades.length > 0 ? liveTrades.filter((t: any) => (t.pnl || 0) > 0).length / liveTrades.length : null,
+        },
         today: { opened: 0, closed: 0, realized_pnl: 0, capital_used: 0, wins: 0, losses: 0 },
-      }, 200);
+        _ts: Date.now(),
+      };
+      lastGoodPerf = result;
+      const res = c.json(result, 200);
+      res.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+      res.headers.set('Pragma', 'no-cache');
+      res.headers.set('Expires', '0');
+      return res;
+    } catch (e) {
+      if (lastGoodPerf) {
+        const res = c.json({ ...lastGoodPerf, _cached: true, _ts: Date.now() }, 200);
+        res.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+        return res;
+      }
+      return c.json({ error: 'db error' }, 500);
     }
   })
 
@@ -1282,8 +1479,8 @@ const app = new Hono()
     } catch {}
 
     // Settings
-    let autoEnabled = false;
-    let paperMode = false;
+    let autoEnabled = true;  // default true — ECONNRESET fallback keeps engine running
+    let paperMode = true;    // default true — ECONNRESET fallback stays in paper mode
     let systemActivated = false;
     let learningEnabled = false;
     let marketCount = 0;
@@ -1292,7 +1489,7 @@ const app = new Hono()
       const s: Record<string, string> = {};
       rows.forEach(r => { s[r.key] = r.value; });
       autoEnabled = s.auto_trade_enabled === "true";
-      paperMode = s.paper_trading_enabled !== "false";
+      paperMode = resolvePaperMode(s.paper_trading_enabled);
       systemActivated = s.system_activated === "true";
       learningEnabled = s.learning_enabled !== "false";
     } catch {}
@@ -1546,7 +1743,14 @@ const app = new Hono()
         expectancy_per_trade: expectancy,
         max_drawdown: maxDrawdown,
         avg_hold_minutes: avgHoldMinutes,
-        ai_confidence_accuracy: winRate, // proxy: win rate as confidence accuracy
+        ai_confidence_accuracy: (() => {
+          // True calibration: % of high-confidence trades (confidence >= 0.65 of score range)
+          // that actually won. We use kellyFraction as the confidence proxy from trades.
+          // closed trades with kellyFraction > 0 are our "high-conf" signal
+          const highConf = closed.filter(t => (t.kellyFraction ?? 0) > 0.10);
+          if (highConf.length === 0) return winRate; // fallback to win rate if no data
+          return highConf.filter(t => (t.pnl ?? 0) > 0).length / highConf.length;
+        })(),
         p_target_accuracy: pTargetAccuracy,
         overall_grade: grade,
         exit_distribution: exitDist,

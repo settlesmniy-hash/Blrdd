@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: pulsetrade-api
+    runtime: node
+    region: oregon
+    plan: free
+    buildCommand: "npm install -g bun && bun install && cd packages/web && bun run build"
+    startCommand: "cd packages/web && bun src/server.ts"
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 4200
+      - key: DATABASE_URL
+        value: libsql://pulsetrade-pulsetrade.aws-us-west-2.turso.io
+      - key: DATABASE_AUTH_TOKEN
+        value: eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJpYXQiOjE3ODAzMTA1NTUsImlkIjoiMDE5ZTgyYzctMjkwMS03ZmE0LTg1MjMtM2RlZTFlMzFkZWNjIiwicmlkIjoiOTBlNTAzNDMtNjhmNS00OTVlLWIwZGYtNzc4ODVhNGFmOGE5In0.AGRTnxf4XDgovFp_ceSNljIgEl9QTGCk7jUDBAKMVj_QPd1nSQuRU2BZgUEMe2dY0IPNB6CRa9O2Rn8n3An5AQ
+      - key: KALSHI_KEY_ID
+        value: 77c93ac2-7cc9-4b12-9e0c-ecfa1dc969c1
+      - key: KALSHI_PRIVATE_KEY
+        value: "-----BEGIN RSA PRIVATE KEY-----\nMIIEogIBAAKCAQEAxU0aTPZF4IMSU151dVwcTG+E0Lxwf+vM0gKbRRTcUlWrzoy1fhZVb4rasOGtzru9d9rrcIldjAa5xOneoZuvYtGu0ltb+RcbHAintIRb8juFUi9XRVdMAqkzx3MR5wi6v6efD3H2W6KgZ5w/9qsoanr69Xo3rniIOM/89pRLLc01zOM+eHQDJ1EvvM6TTHeehGF5YfvHq2s6V3+hq9RGnKG3omX/f+wxIo12uMwGS2f8+bOJa5E0dzsY9KosWjIHeb4GYCfcz9ZdNX7Q5tZixdNLOvDq68ULfgxAPcNpDx4eKb8ZVBy1CMZui0jVvzX+YwkHqRg9l+LbrL4zgRiZjwIDAQABAoIBACckNC8HfnZbWmPare+x7dVGHHGyqJjgJTqWlMogKNNWtqZb6NeSQ7HEuLz1kJ8eRKjF8AZb4giY/vqvMOEbuzAeDBIkWLsyV8j4eJjJ11nXcAwNY0FY37X5blHHpMoSQ8Yo0Vflkmu8eBkF+PSNIQ/6xNW1QN2mgNPQg01BvyZfIWMuDd8DSch7zKEB4/VHHT6+ziVFzh2foC/TjbzurnJyn7yUdEf3Tfg0HXUsEleh7U077tO6sF7el+EIMnRSsDCOB3XMTeB0ZLEFvNx8ySdZ9t6GZwPE7sCGu1pfBFindcV+8RiBiY0ypcceQewe/CMHt9dzAq7xA7zxPAex0wUCgYEAyCUPetQ1kEw0TuAl871tgjPcVgBkBslIaE3l4cf1J5pSN4f0nEi2DkKPe4FBdXMHmNnPE/1JA4QyZ92hPGtB4ttuc6Hpm5kO5dWLgmo9bPvBqQVkdNGUrhJNeDcbC232drEZYCxIRBSLqPQaquCQ1cd89EzeHD34AdugTR/xEZsCgYEA/FzjWQ7fR+gWQB3F88eRcxnjmnIBYgIgqIWiG1IySMxv7R99WhxQLXVMzB9hipRrwOkjwEoDPBe/Kg2hpMGjaSUQrFBlqTEkeqop3rY3rcApl5Ehq/D6jTggzPxhzV3573V7n8k3c5FzWgTGPh597lWrivbOfflfjNbqgmyoAR0CgYAMnBEimvYY9kQhaAvcFGYu2teZ74Jdzxapw6alF/UBHr7pUr59jjMyKM1jaZxXKv0iiy55wu5zs0N9ub/rz5IiGdMWo+/U5srCfjbA67KdCCuGW5mdpoqogOyykz439SCfD79aiM+wwl6eMWrwsx9M6Lmdpq4jt1/FtjGeSlHk2wKBgDIyl9ZjKu62r5ZZVcLD856di7Rw8O151t0ul6wvkWkBoVHdbaW69AfWyUvhAhn6o+Rfe4kIL9SINLI8u+Z1zfdgNAzSgSZCbCsqJeHzBOg+zQclCzmUWYI1o/CiUyHyi4CiMdD6yVjnmbZSNMyubAY4bELcDP7p16PALC19R33RAoGAWTDG7fj8kIITnpARsi4rjM12cAjFLvCO6HNK/gB71LYB2ms2z++XgNF9WTPLL4BnNACMObnqbTjlGZQqXw0vflsZKjZmR7eowKQyQxB5nLtnw24f1YCHCBefbyGpE39lY6Qc7WcTZE9dB0XEjdBXG1skRNiW7s5pBDfqkzUXTx8=\n-----END RSA PRIVATE KEY-----"
+      - key: INTERNAL_API_KEY
+        value: c9a1e4c0426e143e64d94e9d5328a32ec862c397cbae07393e2282267c08829c

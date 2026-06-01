@@ -8,13 +8,7 @@ import { useRouter } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 import { Ionicons } from "@expo/vector-icons";
 import { Colors } from "../lib/colors";
-import { api } from "../lib/api";
-import Constants from "expo-constants";
-
-const BASE_URL =
-  (Constants.expoConfig?.extra?.apiUrl as string) ??
-  process.env.EXPO_PUBLIC_API_URL ??
-  "http://localhost:4200/";
+import { api, apiFetch } from "../lib/api";
 
 const TABS = ["P&L", "Win Rate", "Log", "AI Report", "Readiness", "Learning", "Engine"];
 const ENGINE_VERSION = "4.0.0";
@@ -37,9 +31,9 @@ export default function PerformanceScreen() {
 
   // Core performance data
   const { data, isLoading } = useQuery({
-    queryKey: ["performance"],
+    queryKey: ["perf2"],
     queryFn: async () => {
-      const res = await api.performance.$get();
+      const res = await api.perf2.$get();
       return res.json() as any;
     },
     refetchInterval: 15000,
@@ -49,7 +43,7 @@ export default function PerformanceScreen() {
   const { data: engineStatus } = useQuery({
     queryKey: ["engine-status"],
     queryFn: async () => {
-      const res = await fetch(`${BASE_URL}api/trade-engine/status`);
+      const res = await apiFetch(`api/trade-engine/status`);
       return res.json() as any;
     },
     refetchInterval: 15000,
@@ -59,7 +53,7 @@ export default function PerformanceScreen() {
   const { data: tradesData } = useQuery({
     queryKey: ["trades"],
     queryFn: async () => {
-      const res = await fetch(`${BASE_URL}api/trades`);
+      const res = await apiFetch(`api/trades`);
       return res.json() as any;
     },
     refetchInterval: 30000,
@@ -70,7 +64,7 @@ export default function PerformanceScreen() {
   const { data: aiQuality, isLoading: aiLoading } = useQuery({
     queryKey: ["ai-quality"],
     queryFn: async () => {
-      const res = await fetch(`${BASE_URL}api/trade-engine/ai-quality`);
+      const res = await apiFetch(`api/trade-engine/ai-quality`);
       return res.json() as any;
     },
     refetchInterval: 60000,
@@ -81,7 +75,7 @@ export default function PerformanceScreen() {
   const { data: readiness, isLoading: readyLoading } = useQuery({
     queryKey: ["readiness"],
     queryFn: async () => {
-      const res = await fetch(`${BASE_URL}api/trade-engine/readiness`);
+      const res = await apiFetch(`api/trade-engine/readiness`);
       return res.json() as any;
     },
     refetchInterval: 60000,
@@ -92,7 +86,7 @@ export default function PerformanceScreen() {
   const { data: adaptive, isLoading: adaptiveLoading } = useQuery({
     queryKey: ["adaptive"],
     queryFn: async () => {
-      const res = await fetch(`${BASE_URL}api/trade-engine/adaptive`);
+      const res = await apiFetch(`api/trade-engine/adaptive`);
       return res.json() as any;
     },
     refetchInterval: 30000,
@@ -103,7 +97,7 @@ export default function PerformanceScreen() {
   const { data: learning, isLoading: learningLoading } = useQuery({
     queryKey: ["learning"],
     queryFn: async () => {
-      const res = await fetch(`${BASE_URL}api/trade-engine/learning`);
+      const res = await apiFetch(`api/trade-engine/learning`);
       return res.json() as any;
     },
     refetchInterval: 60000,
@@ -122,7 +116,7 @@ export default function PerformanceScreen() {
   // Weekly P&L (last 7 days from closed trades)
   const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
   const weeklyTrades = closedTrades.filter((t: any) => {
-    const d = t.exitedAt || t.exited_at;
+    const d = t.exitedAt;
     return d && new Date(d).getTime() > weekAgo;
   });
   const weeklyPnl = weeklyTrades.reduce((sum: number, t: any) => sum + (t.pnl || 0), 0);
@@ -151,19 +145,16 @@ export default function PerformanceScreen() {
     if (dd > maxDD) maxDD = dd;
   }
 
-  // AI Confidence accuracy (from closed trades with ai_confidence)
-  const tradesWithConf = closedTrades.filter((t: any) => t.ai_confidence != null);
-  const confAccurate = tradesWithConf.filter((t: any) =>
-    (t.ai_confidence >= 0.65 && (t.pnl || 0) > 0) ||
-    (t.ai_confidence < 0.65 && (t.pnl || 0) <= 0)
-  );
-  const confAccuracy = tradesWithConf.length
-    ? confAccurate.length / tradesWithConf.length
+  // AI Confidence accuracy: high-kellyFraction trades that won
+  const tradesWithKelly = closedTrades.filter((t: any) => (t.kellyFraction ?? 0) > 0.10);
+  const confAccurate = tradesWithKelly.filter((t: any) => (t.pnl || 0) > 0);
+  const confAccuracy = tradesWithKelly.length
+    ? confAccurate.length / tradesWithKelly.length
     : null;
 
   // pTarget accuracy: trades that hit pTarget
-  const tradesWithTarget = closedTrades.filter((t: any) => t.p_target != null && t.exit_reason);
-  const hitTarget = tradesWithTarget.filter((t: any) => t.exit_reason === "PROFIT_TARGET");
+  const tradesWithTarget = closedTrades.filter((t: any) => t.pTarget != null && t.exitReason);
+  const hitTarget = tradesWithTarget.filter((t: any) => t.exitReason === "PROFIT_TARGET");
   const pTargetAccuracy = tradesWithTarget.length
     ? hitTarget.length / tradesWithTarget.length
     : null;
@@ -260,7 +251,7 @@ export default function PerformanceScreen() {
                     <View style={{ flex: 1 }}>
                       <Text style={{ color: Colors.blue ?? "#3b82f6", fontWeight: "700", fontSize: 12 }}>PAPER ENGINE RUNNING</Text>
                       <Text style={{ color: Colors.gray ?? "#6b7280", fontSize: 11, marginTop: 2 }}>
-                        Scanning every 5 min · {engineStatus?.last_scan ? `Last: ${new Date(engineStatus.last_scan.startedAt).toLocaleTimeString()}` : "Waiting for first scan"}
+                        Scanning every 1 min · {engineStatus?.last_scan ? `Last: ${new Date(engineStatus.last_scan.startedAt).toLocaleTimeString()}` : "Waiting for first scan"}
                       </Text>
                     </View>
                     <Text style={{ color: Colors.blue ?? "#3b82f6", fontSize: 11, fontWeight: "600" }}>
@@ -273,7 +264,7 @@ export default function PerformanceScreen() {
                   <View style={styles.emptyCard}>
                     <Text style={styles.emptyTitle}>Scanning Markets...</Text>
                     <Text style={styles.emptySub}>
-                      Paper engine is running in the background, scanning every 5 minutes. Trades will appear here automatically when high-confidence opportunities are found.
+                      Paper engine is running in the background, scanning every minute. Trades will appear here automatically when high-confidence opportunities are found.
                     </Text>
                     <TouchableOpacity
                       style={styles.emptyBtn}
@@ -378,13 +369,13 @@ export default function PerformanceScreen() {
                     {openTrades.map((t: any) => (
                       <View key={t.id} style={styles.openRow}>
                         <View style={styles.tradeLeft}>
-                          <Text style={styles.tradeTicker}>{t.marketId || t.market_id}</Text>
+                          <Text style={styles.tradeTicker}>{t.marketId}</Text>
                           <Text style={styles.tradeDate}>
-                            {t.side?.toUpperCase()} · @{Math.round((t.priceEntered || t.price_entered || 0) * 100)}¢
+                            {t.side?.toUpperCase()} · @{Math.round((t.priceEntered || 0) * 100)}¢
                           </Text>
-                          {t.p_target != null && (
+                          {t.pTarget != null && (
                             <Text style={styles.pTargetNote}>
-                              pTarget: {Math.round(t.p_target * 100)}¢
+                              pTarget: {Math.round(t.pTarget * 100)}¢
                             </Text>
                           )}
                         </View>
@@ -395,8 +386,8 @@ export default function PerformanceScreen() {
                           {t.contracts != null && (
                             <Text style={styles.tradePrice}>{t.contracts} contracts</Text>
                           )}
-                          {t.ai_confidence != null && (
-                            <Text style={styles.qualityNote}>AI {fmtPct(t.ai_confidence)}</Text>
+                          {t.kellyFraction != null && (
+                            <Text style={styles.qualityNote}>Kelly {fmtPct(t.kellyFraction)}</Text>
                           )}
                         </View>
                       </View>
@@ -479,7 +470,7 @@ export default function PerformanceScreen() {
                     {closedTrades.length > 0 && (() => {
                       const counts: Record<string, number> = {};
                       closedTrades.forEach((t: any) => {
-                        const r = t.exit_reason || "UNKNOWN";
+                        const r = t.exitReason || "UNKNOWN";
                         counts[r] = (counts[r] || 0) + 1;
                       });
                       const exitColors: Record<string, string> = {
@@ -521,25 +512,25 @@ export default function PerformanceScreen() {
                       return (
                         <View key={t.id} style={styles.tradeRow}>
                           <View style={styles.tradeLeft}>
-                            <Text style={styles.tradeTicker}>{t.marketId || t.market_id}</Text>
+                            <Text style={styles.tradeTicker}>{t.marketId}</Text>
                             <Text style={styles.tradeDate}>
-                              {new Date(t.enteredAt || t.entered_at).toLocaleDateString()} · {t.side?.toUpperCase()}
+                              {new Date(t.enteredAt).toLocaleDateString()} · {t.side?.toUpperCase()}
                             </Text>
-                            {t.exit_reason && t.status === "closed" && (
-                              <View style={[styles.exitBadge, { borderColor: exitColors[t.exit_reason] || Colors.gray }]}>
-                                <Text style={[styles.exitBadgeText, { color: exitColors[t.exit_reason] || Colors.gray }]}>
-                                  {t.exit_reason.replace(/_/g, " ")}
+                            {t.exitReason && t.status === "closed" && (
+                              <View style={[styles.exitBadge, { borderColor: exitColors[t.exitReason] || Colors.gray }]}>
+                                <Text style={[styles.exitBadgeText, { color: exitColors[t.exitReason] || Colors.gray }]}>
+                                  {t.exitReason.replace(/_/g, " ")}
                                 </Text>
                               </View>
                             )}
-                            {t.mispricing_gap != null && (
+                            {t.mispricingGap != null && (
                               <Text style={styles.mispricingNote}>
-                                Gap {t.mispricing_gap > 0 ? "+" : ""}{(t.mispricing_gap * 100).toFixed(1)}¢
+                                Gap {t.mispricingGap > 0 ? "+" : ""}{(t.mispricingGap * 100).toFixed(1)}¢
                               </Text>
                             )}
-                            {t.velocity_at_entry != null && (
+                            {t.velocityAtEntry != null && (
                               <Text style={styles.mispricingNote}>
-                                Vel {t.velocity_at_entry > 0 ? "+" : ""}{(t.velocity_at_entry * 100).toFixed(2)}¢/tick
+                                Vel {t.velocityAtEntry > 0 ? "+" : ""}{(t.velocityAtEntry * 100).toFixed(2)}¢/tick
                               </Text>
                             )}
                           </View>
@@ -552,19 +543,19 @@ export default function PerformanceScreen() {
                               {t.status === "open" ? "OPEN" : fmt$(t.pnl || 0)}
                             </Text>
                             <Text style={styles.tradePrice}>
-                              @{Math.round((t.priceEntered || t.price_entered || 0) * 100)}¢
-                              {(t.evAtEntry || t.ev_at_entry) != null
-                                ? ` · EV ${fmtCents(t.evAtEntry || t.ev_at_entry)}`
+                              @{Math.round((t.priceEntered || 0) * 100)}¢
+                              {t.evAtEntry != null
+                                ? ` · EV ${fmtCents(t.evAtEntry)}`
                                 : ""}
                             </Text>
-                            {t.p_target != null && (
+                            {t.pTarget != null && (
                               <Text style={styles.pTargetNote}>
-                                pT {Math.round(t.p_target * 100)}¢
+                                pT {Math.round(t.pTarget * 100)}¢
                               </Text>
                             )}
-                            {t.ai_confidence != null && (
+                            {t.kellyFraction != null && (
                               <Text style={styles.qualityNote}>
-                                AI {fmtPct(t.ai_confidence)}
+                                Kelly {fmtPct(t.kellyFraction)}
                               </Text>
                             )}
                             {t.entry_quality != null && (
